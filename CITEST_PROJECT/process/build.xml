@@ -1,0 +1,139 @@
+<?xml version="1.0" encoding="windows-1252"?>
+<project basedir="." default="cleanbuild">
+	<property name="version" value="1.0"/>
+	<property name="defaultjobversion" value="_0_1"/>
+	<property environment="env"/>
+	<property file="build.properties"/>
+	<property name="basedir" value="."/>
+	<property name="lib.directory" value="${axislibs}"/>	
+	<property name="deployartifacts" value="${basedir}/deploy/artifacts"/>
+	<property name="webinf.dir" value="${deployartifacts}/WEB-INF"/>
+	<property name="wsdl.directory" value="${deployartifacts}/wsdl"/>
+	<property name="wsdd.directory" value="${deployartifacts}/wsdd"/>
+	<property name="talendDef.dir" value="${wsdd.directory}/org/talend"/>
+	<property name="metainf.dir" value="${deployartifacts}/META-INF"/>	
+	<property name="deploy.dir" value="${basedir}/deploy"/>
+	<property name="security" value="true"/>
+	
+	<!-- connect to jenkins environment properties -->
+	<property environment="jenkins"/>
+	<!-- default when not in jenkins -->
+	<property name="jenkins.BUILD_NUMBER" value="0.1"/>
+
+	<condition property="jobversion" value="${env.jobversion}" else="${defaultjobversion}">
+		<isset property="env.jobversion"/>
+	</condition>
+	<scriptdef language="javascript" name="lower">
+		<attribute name="string"/>
+		<attribute name="to"/>
+		project.setProperty( attributes.get( "to" ),
+        attributes.get( "string" ).toLowerCase() );
+</scriptdef>
+	<target name="lower">
+		<lower string="${project.name}" to="talend.project.name"/>
+		<lower string="${main.class}" to="talend.job.folder"/>
+		<echo message="${talend.project.name}"/>
+		<property name="talend.job.folder.name" value="${talend.job.folder}${jobversion}"/>
+		<echo message="${talend.job.folder.name}"/>
+	</target>
+	<path id="lib.path.ref">
+		<fileset dir="${lib.directory}">
+			<include name="**/*.jar"/>
+		</fileset>
+		<pathelement location="${classDir}"/>
+	</path>
+
+	<path id="wl.deploy.path">
+		<fileset file="${weblogic.server.lib.directory}/weblogic.jar"/>
+		<fileset file="${weblogic.server.lib.directory}/webservices.jar"/>
+	</path>
+	<target name="generateWsdl" depends="lower">
+		<mkdir dir="${wsdl.directory}"/>
+		<taskdef resource="axis-tasks.properties" classpathref="lib.path.ref"/>
+		<axis-java2wsdl classname="${talend.project.name}.${talend.job.folder.name}.${main.class}" output="${wsdl.directory}/${main.class}.wsdl" location="http://localhost:8080/${main.class}" namespace="http://talend.org" style="DOCUMENT" methods="runJob" >
+		</axis-java2wsdl>
+	</target>
+	<target name="generateWsdd" depends="generateWsdl">
+		<mkdir dir="${wsdd.directory}"/>
+		<taskdef resource="axis-tasks.properties" classpathref="lib.path.ref"/>
+	<axis-wsdl2java url="${wsdl.directory}/${main.class}.wsdl" output="${wsdd.directory}" helpergen="false"  serverside="true" implementationClassName="${talend.project.name}.${talend.job.folder.name}.${main.class}" verbose="true" >
+				<mapping namespace="http://${talend.project.name}/${talend.job.folder.name}" package="${talend.project.name}.${talend.job.folder.name}"/>
+		</axis-wsdl2java>
+		<copy todir="${wsdd.directory}/${talend.project.name}/${talend.job.folder.name}">
+			<fileset dir="${talendDef.dir}">
+				<include name="**/*.wsdd"/>
+			</fileset>
+		</copy>
+		<delete dir="${wsdd.directory}/org" failonerror="false"/>
+		<delete>
+		<fileset dir="${wsdd.directory}/${talend.project.name}/${talend.job.folder.name}" includes="**/*.java"/>
+		</delete>
+	</target>
+	<target name="generateServerWsdd" depends="generateWsdd">
+		<mkdir dir="${webinf.dir}"/>
+		<taskdef resource="axis-tasks.properties" classpathref="lib.path.ref"/>
+		<!--<axis-admin
+		xmlfile="${wsdd.directory}/${talend.project.name}/${talend.job.folder.name}/deploy.wsdd">
+		</axis-admin>-->
+		<java classname="org.apache.axis.utils.Admin" fork="yes" dir="${webinf.dir}" classpathref="lib.path.ref">
+			<arg value="server"/>
+			<arg value="${wsdd.directory}/${talend.project.name}/${talend.job.folder.name}/deploy.wsdd"/>
+		</java>
+	</target>
+	<target name="prepareWEB-INF-secure" depends="generateServerWsdd" if="${security}">
+		<copy todir="${webinf.dir}">
+			<fileset dir="${lib.directory}">
+				<include name="web-security.xml"/>
+				<include name="weblogic.xml"/>
+			</fileset>
+		</copy>
+		<move file="${webinf.dir}/web-security.xml" tofile="${webinf.dir}/web.xml"/>
+		<copy todir="${webinf.dir}/classes">
+			<fileset dir="${classDir}"/>
+		</copy>
+		<copy todir="${webinf.dir}/lib">
+			<fileset dir="${axislibs}" excludes="*.xml"/>
+			<fileset dir="${talendJoblib}"/>
+		</copy>
+		<echo message="${talend.project.name} - Security Enabled"/>
+	</target>
+	
+		<target name="prepareWEB-INF" depends="generateServerWsdd" unless="${security}">
+		<copy todir="${webinf.dir}">
+			<fileset dir="${lib.directory}">
+				<include name="web.xml"/>
+			</fileset>
+		</copy>
+		<copy todir="${webinf.dir}/classes">
+			<fileset dir="${classDir}"/>
+		</copy>
+		<copy todir="${webinf.dir}/lib">
+			<fileset dir="${axislibs}" excludes="*.xml"/>
+			<fileset dir="${talendJoblib}"/>
+		</copy>
+		<echo message="${talend.project.name} - Security Disabled"/>
+	</target>
+
+	<target name="clean">
+		<delete dir="${deploy.dir}" failonerror="false"/>	
+	</target>
+	<target name="build-manifest">
+		<delete failonerror="false">
+			<fileset dir="${metainf.dir}" includes="**/*"/>
+		</delete>
+		<mkdir dir="${metainf.dir}"/>
+		<manifest file="${metainf.dir}/MANIFEST.MF">
+			<attribute name="Implementation-Version" value="${version}b${jenkins.BUILD_NUMBER}"/>
+			<attribute name="Weblogic-Application-Version" value="${version}b${jenkins.BUILD_NUMBER}"/>
+		</manifest>
+	</target>
+	<target name="build" description="JARs the Task" depends="prepareWEB-INF,prepareWEB-INF-secure, build-manifest">
+		<zip destfile="${deploy.dir}/${main.class}_0.1.war" basedir="${deployartifacts}">
+		</zip>
+		<delete failonerror="false">
+			<fileset dir="../talend-workspace" includes="**/*"/>
+			<dirset dir="../talend-workspace" includes="**/*"/>						
+			<dirset dir="../" includes="talend-workspace"/>						
+		</delete>
+	</target>	
+</project>
